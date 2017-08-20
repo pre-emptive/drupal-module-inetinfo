@@ -1,0 +1,31 @@
+<?php
+
+// $Id: inetinfo.install,v 1.1 2008/09/10 13:09:44 ralph Exp $
+
+/**
+ * Implementation of hook_install.
+ * @param none
+ * @return none
+ */
+function inetinfo_install() {
+}
+
+/**
+ * Implementation of hook_uninstall.
+ * @param none
+ * @return none
+ */
+function inetinfo_uninstall() {
+  // We should probably run through inetinfo_targets and remove
+  // then from the {access} table so that they don't remain
+  // permanently banned!
+  foreach (array(
+    'inetinfo_enabled',
+  ) as $item) {
+    variable_del($item);
+  }
+}
+
+
+// The following line is for Vim users - please don't delete it.
+// vim: set filetype=php expandtab tabstop=2 shiftwidth=2 smartindent:

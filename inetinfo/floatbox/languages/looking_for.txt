@@ -1,0 +1,11 @@
+
+Finnish (fi)
+Swedish (sv)
+Norwegian (no)
+Korean (ko)
+Polish (pl)
+Hebrew (he)
+Turkish (tr)
+Czech (cs)
+Arabic (ar)
+Icelandic (is)

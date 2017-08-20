@@ -1,0 +1,294 @@
+<?php
+
+// $Id: inetinfo.module,v 1.1 2008/09/10 13:09:44 ralph Exp $
+
+// inetinfo.module - Ban users (IPs) automatically
+
+/**
+ * Display help and module information
+ * @param section which section of the site we're displaying help 
+ * @return help text for section
+ */
+function inetinfo_help($section='') {
+  $output = '';
+
+  switch ($section) {
+    case "admin/help#inetinfo":
+      break;
+  }
+
+  return $output;
+} // function inetinfo_help
+
+/**
+ * Implementation of hook_perm. This module doesn't really use permissions much.
+ * @param none
+ * @return an array of permissions
+ */
+function inetinfo_perm() {
+  return array('administer inetinfo module', 'use inetinfo service');
+} // function inetinfo_perm()
+
+/** 
+ * Implementation of hook_menu. Only one menu item is provided as a link to block settings
+ * @param may_cache
+ * @return an array manu items
+ */
+function inetinfo_menu() {
+  $items = array();
+
+  $items['admin/settings/inetinfo'] = array(
+    'title' => 'Internet Information',
+    'description' => 'Configure the iNet Info module',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('inetinfo_admin_settings_form'),
+    'access arguments' => array('administer inetinfo module'),
+    'file' => 'inetinfo.admin.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+  $items['_inetinfo'] = array(
+    'page callback' => 'inetinfo_request_handler',
+    'access arguments' => array('use inetinfo service'),
+    'type' => MENU_LOCAL_TASK,
+  );
+
+  return $items;
+}
+
+/**
+ * Get a web file (HTML, XHTML, XML, image, etc.) from a URL.  Return an
+ * array containing the HTTP server response header fields and content.
+ * From: http://nadeausoftware.com/articles/2007/06/php_tip_how_get_web_page_using_curl
+ */
+function _inetinfo_web_fetch($url)
+{
+    $options = array(
+        CURLOPT_RETURNTRANSFER => true,     // return web page
+        CURLOPT_HEADER         => false,    // don't return headers
+        CURLOPT_FOLLOWLOCATION => true,     // follow redirects
+        CURLOPT_ENCODING       => "",       // handle all encodings
+        CURLOPT_USERAGENT      => "Drupal inetinfo Module", // who am i
+        CURLOPT_AUTOREFERER    => true,     // set referer on redirect
+        CURLOPT_CONNECTTIMEOUT => 30,      // timeout on connect
+        CURLOPT_TIMEOUT        => 30,      // timeout on response
+        CURLOPT_MAXREDIRS      => 3,       // stop after 10 redirects
+    );
+
+    $ch      = curl_init( $url );
+    curl_setopt_array( $ch, $options );
+    $content = curl_exec( $ch );
+    $err     = curl_errno( $ch );
+    $errmsg  = curl_error( $ch );
+    $header  = curl_getinfo( $ch );
+    curl_close( $ch );
+
+    $header['errno']   = $err;
+    $header['errmsg']  = $errmsg;
+    $header['content'] = $content;
+    return $header;
+}
+
+function _inetinfo_host_lookup($host = '') {
+  $output = '';
+  if(preg_match('/^[\d\.]+$/',$host)) {
+    // Looks like a number, so we'll call it an IP address
+    $hostname = gethostbyaddr($host);
+    $ipaddresses = gethostbynamel($hostname);
+    if(!is_array($ipaddresses)) {
+      $ipaddresses = array();
+    }
+    $output = $host . ":\n";
+    $output .= t('Hostname: @host', array('@host' => $hostname)) . "\n";
+    $output .= t('Other IPs: @ips', array('@ips' => implode(', ', $ipaddresses))) . "\n";
+  } else {
+    // Looks like a hostname...
+  }
+  return '<pre>' . $output . '</pre>';
+}
+
+function _inetinfo_whois_lookup($host = '') {
+  if(variable_get('inetinfo_whois_lookup_type', 'cmd') == 'cmd') {
+    // Make a GeoIP lookup via a shell command
+    $cmd = variable_get('inetinfo_whois_lookup_cmd', '/usr/bin/whois %HOST%');
+    $cmd = preg_replace('/\%HOST\%/', $host, $cmd);
+    $cmd = escapeshellcmd($cmd);
+    $out = exec($cmd, $output, $retval);
+    if(!$retval) {
+      return '<pre>' . implode("\n", $output) . '</pre>';
+    } else {
+      return '<pre>' . $cmd . ' returned ' . $retval . '</pre>';
+    }
+  } else {
+    // Use our PHP class to do whois lookups
+    include_once('phpwhois-4.1.3/whois.main.php');
+
+    $whois = new Whois();
+    $result = $whois->Lookup($host,false);
+
+    if(isset($result['rawdata'])) {
+      $data = implode("\n", $result['rawdata']);
+      //return '<pre>' . print_r($result, 1) . '</pre>';
+      return '<pre>' . $data . '</pre>';
+    } else {
+      return "An error occurred fetching whois data";
+    }  
+  }
+}  
+
+function _inetinfo_geoip_lookup($host = '') {
+  if(variable_get('inetinfo_geoip_lookup_type', 'cmd') == 'cmd') {
+    // Make a GeoIP lookup via a shell command
+    $cmd = variable_get('inetinfo_geoip_lookup_cmd', '/usr/bin/geoiplookup %HOST%');
+    $cmd = preg_replace('/\%HOST\%/', $host, $cmd);
+    $cmd = escapeshellcmd($cmd);
+    $out = exec($cmd, $output, $retval);
+    if(!$retval) {
+      return '<pre>' . implode("\n", $output) . '</pre>';
+    } else {
+      return '<pre>' . $cmd . ' returned ' . $retval . '</pre>';
+    }
+  } else {
+    // Use a web service to do geo lookup
+    $url = variable_get('inetinfo_geoip_lookup_url', 'http://api.hostip.info/get_html.php?ip=%HOST%');
+    $url = preg_replace('/\%HOST\%/', $host, $url);
+    $response = _inetinfo_web_fetch($url);
+    if($response['errno'] == 0) {
+      if(substr($response['content_type'], 0, 10) == 'text/plain') {
+        $out = '<pre>' . $response['content'] . '</pre>';
+      } else {
+        $out = $response['content'];
+      }
+      return $out;
+    } else {
+      return $response['errmsg'];
+    }
+  }
+}
+
+function _inetinfo_html_head($ajax = FALSE) {
+  global $base_url;
+  $output = '';
+
+  $js = base_path() . '/misc/jquery.js';
+
+  $output = '<html><head>';
+  $output .= '<style type="text/css">body { font-family: arial,hevetica,sans-serif; } h1 { font-size: 1.1em; }</style>' . "\n";
+
+  if($ajax) {
+    $path = base_path() . $_REQUEST['q'];
+    $path = preg_replace('/\/ajax$/','',$path);
+    // Add in a meta refresh to the plain HTML page if no javascript
+    $output .= '<noscript><meta http-equiv="refresh" content="0; url=' . $base_url . $path . '"></noscript>' . "\n";
+    $js = base_path() . 'misc/jquery.js';
+    $output .= '<script type="text/javascript" src="' . $js . '"></script>' . "\n";
+    $output .= '<script type="text/javascript">' . "\n";
+    $output .= '$(document).ready(function() {
+$.get("' . $path . '/host", function(data) { $("#host").html(data); });
+$.get("' . $path . '/geoip", function(data) { $("#geoip").html(data); });
+$.get("' . $path . '/whois", function(data) { $("#whois").html(data); });
+});' . "\n";
+
+    $output .= '</script>';
+  }
+
+  $output .= "</head>\n";
+
+  return $output;
+}
+
+function inetinfo_request_handler() {
+  $args = func_get_args();
+
+  if(!isset($args[0]) || preg_match('/^\s*$/', $args[0])) {
+    // not a proper argument
+    drupal_not_found();
+  }
+
+  $output = '';
+
+  switch($args[1]) {
+    case 'host':
+      // Just do a hostname lookup and output it
+      $output = '<html><body>' . _inetinfo_host_lookup($args[0]);
+      break;
+    case 'whois':
+      // Do a whois lookup and output it
+      $output = '<html><body>' . _inetinfo_whois_lookup($args[0]);
+      break;
+    case 'geoip':
+      // Do a geo IP lookup and output it
+      $output = '<html><body>' . _inetinfo_geoip_lookup($args[0]);
+      break;
+    case 'ajax':
+      // Just output an Ajax 'container' page that will cause the
+      // browser to request the hostname, whois and geo separately
+      $output .= _inetinfo_html_head(TRUE);
+      $output .= '<body><h1>Hostname Lookup</h1>';
+      $output .= "<div id=\"host\">Loading, please wait...</div>";
+      if(variable_get('inetinfo_geoip_lookup_type', 'cmd') != 'none') {
+        $output .= '<h1>GeoIP Information</h1>';
+        $output .= "<p><div id=\"geoip\">Loading, please wait...</div></p>\n";
+      }
+      if(variable_get('inetinfo_whois_lookup_type', 'cmd') != 'none') {
+        $output .= '<h1>Whois Lookup</h1>';
+        $output .= "<div id=\"whois\">Loading, please wait...</div>";
+      }
+      $output .= '</body></html>';
+      break;
+    default:
+      // Output a complete HTML page, looking up each item sequentially
+      $output .= _inetinfo_html_head();
+      $output .= '<body><h1>Hostname Lookup</h1>';
+      $output .= _inetinfo_host_lookup($args[0]);
+      if(variable_get('inetinfo_geoip_lookup_type', 'cmd') != 'none') {
+        $output .= '<h1>GeoIP Information</h1>';
+        $output .= _inetinfo_geoip_lookup($args[0]);
+      }
+      if(variable_get('inetinfo_whois_lookup_type', 'cmd') != 'none') {
+        $output .= '<h1>Whois Lookup</h1>';
+        $output .= _inetinfo_whois_lookup($args[0]);
+      }
+      break;
+  }
+  $output .= '</body></html>';
+  print $output;
+  module_invoke_all('exit');
+  exit;
+}
+
+function inetinfo_l($text, $path = '', $options = array()) {
+  global $_floatbox_called, $base_path;
+
+  if(!isset($_floatbox_called)) {
+    // We have not been called yet - add in our JS and CSS
+    $modpath = drupal_get_path('module','inetinfo');
+    drupal_add_js($modpath . "/floatbox/floatbox.js");
+
+    // Tell Floatbox where the module is:
+    drupal_add_js("var FBUrl='" . $base_path . $modpath . "';", 'inline');
+
+    drupal_add_css($modpath . "/floatbox/floatbox.css");
+    $_floatbox_called = TRUE;
+  }
+
+  $caption = "Information for $text";
+  $caption = preg_replace('/\s+/','_', $caption);
+
+  // Add in our magic attribute
+  $options['attributes']['rel'] = 'floatbox';
+  $options['attributes']['rev'] = "width:800 height:max caption:$caption";
+
+  // And setup the path
+  if($path == '') {
+    $path = '_inetinfo/' . $text;
+    if(variable_get('inetinfo_use_ajax', 0)) {
+      $path .= '/ajax';
+    }
+  }
+
+  // Now return what the usual "l" function does
+  return l($text,$path,$options);
+}
+
+// The following line is for Vim users - please don't delete it.
+// vim: set filetype=php expandtab tabstop=2 shiftwidth=2:
